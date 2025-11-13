@@ -5,6 +5,7 @@ import struct
 import time
 import select
 import binascii
+import random
 
 ICMP_ECHO_REQUEST = 8
 
@@ -137,18 +138,18 @@ def do_one_ping(destAddr, timeout):
     return delay
 
 
+# EXAMPLE FIELDS FOR RESPONSE
+# {"tool":"ping","ts_send":..., "ts_recv":..., "dst":"example.com","dst_ip":"93.184.216.34",
+# "seq":12,"ttl_reply":55,"rtt_ms":23.4,"icmp_type":0,"icmp_code":0,"err":null}
 def ping(host, timeout=1):
+    dummy_RTT = random.randint(0,100) #TODO: remove when actual ping is implemented
+    return {'rtt': dummy_RTT}
+
     # timeout=1 means: If one second goes by without a reply from the server,
     # the client assumes that either the client's ping or the server's pong is lost
     dest = socket.gethostbyname(host)
     print("Pinging " + dest + " using Python:")
     print("")
-    # Send ping requests to a server separated by approximately one second
-    while 1:
-        delay = do_one_ping(dest, timeout)
-        print(delay)
-        time.sleep(1)  # one second
+    delay = do_one_ping(dest, timeout)
     return delay
 
-
-ping("google.com")
