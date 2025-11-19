@@ -33,12 +33,23 @@ def checksum(string):
 
     return answer
 
+# EXAMPLE FIELDS FOR RESPONSE
+# {"tool":"ping","ts_send":..., "ts_recv":..., "dst":"example.com","dst_ip":"93.184.216.34",
+# "seq":12,"ttl_reply":55,"rtt_ms":23.4,"icmp_type":0,"icmp_code":0,"err":null}
 
-def receive_one_ping(mySocket, ID, timeout, destAddr):
+def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime):
+    response = {
+        "ts_send": sendTime,
+        "dst_ip": destAddr,
+        "id": id
+    }
+
     while 1:
         what_ready = select.select([mySocket], [], [], timeout)
         if what_ready[0] == []:  # Timeout
-            return "Request timed out."
+            response["err"] = f"Request timed out. after: {timeout}s"
+            return response
+
         recPacket, addr = mySocket.recvfrom(1024)
 
         # TODO: read the packet and parse the source IP address, you will need this part for traceroute
@@ -102,13 +113,14 @@ def receive_one_ping(mySocket, ID, timeout, destAddr):
         # for other cases of ICMP types, ignore/wait for timeout
 
 def send_one_ping(mySocket, destAddr, ID):
+    timestamp = time.time()
     # Header is type (8), code (8), checksum (16), id (16), sequence (16)
     myChecksum = 0
     # Make a dummy header with a 0 checksum
 
     # struct -- Interpret strings as packed binary data
     header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, 1)
-    data = struct.pack("d", time.time())
+    data = struct.pack("d", timestamp)
     # Calculate the checksum on the data and the dummy header.
     myChecksum = checksum(str(header + data))
     # Get the right checksum, and put in the header
@@ -123,33 +135,27 @@ def send_one_ping(mySocket, destAddr, ID):
     # AF_INET address must be tuple, not str # Both LISTS and TUPLES consist of a number of objects
     mySocket.sendto(packet, (destAddr, 1))
     # which can be referenced by their position number within the object.
-
+    return timestamp
 
 def do_one_ping(destAddr, timeout):
     icmp = socket.getprotobyname("icmp")
     # SOCK_RAW is a powerful socket type. For more details: http://sock- raw.org/papers/sock_raw
     mySocket = socket.socket(socket.AF_INET, socket.SOCK_RAW, icmp)
-    # Return the current process i
-    myID = os.getpid() & 0xFFFF
-    send_one_ping(mySocket, destAddr, myID)
-    delay = receive_one_ping(mySocket, myID, timeout, destAddr)
+    # use RNG for ID
+    myID = random.randint(0,0xFFFF)
+    send_time = send_one_ping(mySocket, destAddr, myID)
+    delay = receive_one_ping(mySocket, myID, timeout, destAddr, send_time) # TODO needs more than just delay
 
     mySocket.close()
     return delay
 
 
-# EXAMPLE FIELDS FOR RESPONSE
-# {"tool":"ping","ts_send":..., "ts_recv":..., "dst":"example.com","dst_ip":"93.184.216.34",
-# "seq":12,"ttl_reply":55,"rtt_ms":23.4,"icmp_type":0,"icmp_code":0,"err":null}
 def ping(host, timeout=1):
     dummy_RTT = random.randint(0,100) #TODO: remove when actual ping is implemented
-    return {'rtt': dummy_RTT}
+    # return {'rtt': dummy_RTT}
 
     # timeout=1 means: If one second goes by without a reply from the server,
     # the client assumes that either the client's ping or the server's pong is lost
     dest = socket.gethostbyname(host)
-    print("Pinging " + dest + " using Python:")
-    print("")
-    delay = do_one_ping(dest, timeout)
-    return delay
+    return do_one_ping(dest, timeout)
 
