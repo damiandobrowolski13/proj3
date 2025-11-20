@@ -41,7 +41,7 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime):
     response = {
         "ts_send": sendTime,
         "dst_ip": destAddr,
-        "id": id
+        "id": ID
     }
 
     while 1:
@@ -86,7 +86,7 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime):
             inner_off = icmp_off + 8
             # make sure inner IP head present
             if len(recPacket) >= inner_off + 20:
-                inner_ip_head_len = (recPacket[inner_off] & 0x0F) & 4
+                inner_ip_head_len = (recPacket[inner_off] & 0x0F) * 4
                 inner_icmp_off = inner_off + inner_ip_head_len
                 # ensure inner ICMP head + 8 Bs of inner payload present
                 if len(recPacket) >= inner_icmp_off + 16:
@@ -148,7 +148,6 @@ def do_one_ping(destAddr, timeout):
 
     mySocket.close()
     return delay
-
 
 def ping(host, timeout=1):
     dummy_RTT = random.randint(0,100) #TODO: remove when actual ping is implemented
