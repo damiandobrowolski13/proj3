@@ -37,7 +37,7 @@ def checksum(string):
 # {"tool":"ping","ts_send":..., "ts_recv":..., "dst":"example.com","dst_ip":"93.184.216.34",
 # "seq":12,"ttl_reply":55,"rtt_ms":23.4,"icmp_type":0,"icmp_code":0,"err":null}
 
-def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime):
+def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime, seq_num):
     response = {
         "ts_send": sendTime,
         "dst_ip": destAddr,
@@ -65,7 +65,7 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime):
         icmp_type, icmp_code, icmp_cksum, icmp_id, icmp_seq = struct.unpack("bbHHh", icmp_head)
         
         # case 1: Echo Reply (type 0) - payload has timestamp
-        if icmp_type == 0 and icmp_id == ID:
+        if icmp_type == 0 and icmp_id == ID and icmp_seq == seq_num:
             receiveTime = time.time()
             payload = recPacket[icmp_off + 8:]
             if len(payload) >= 8:
@@ -122,17 +122,18 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime):
             
         # for other cases of ICMP types, ignore/wait for timeout
 
-def send_one_ping(mySocket, destAddr, ID):
+def send_one_ping(mySocket, destAddr, ID, seq_num):
     timestamp = time.time()
-    # Header is type (8), code (8), checksum (16), id (16), sequence (16)
-    myChecksum = 0
-    # Make a dummy header with a 0 checksum
+    seq_num = seq_num & 0xFFFF # handle unlikely case you ping more than 65K times :P
 
+    # Header is type (8), code (8), checksum (16), id (16), sequence (16)
+    # Make a dummy header with a 0 checksum
+    myChecksum = 0
     # struct -- Interpret strings as packed binary data
-    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, 1)
+    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, seq_num)
     data = struct.pack("d", timestamp)
     # Calculate the checksum on the data and the dummy header.
-    myChecksum = checksum(str(header + data))
+    myChecksum = checksum((header + data).decode('latin-1')) # latin-1 fixes issue with str() conversion of bytes & python 3
     # Get the right checksum, and put in the header
     if sys.platform == 'darwin':
         # Convert 16-bit integers from host to network byte order
@@ -140,32 +141,30 @@ def send_one_ping(mySocket, destAddr, ID):
     else:
         myChecksum = socket.htons(myChecksum)
 
-    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, 1)
+    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, seq_num)
     packet = header + data
     # AF_INET address must be tuple, not str # Both LISTS and TUPLES consist of a number of objects
     mySocket.sendto(packet, (destAddr, 1))
     # which can be referenced by their position number within the object.
     return timestamp
 
-def do_one_ping(destAddr, timeout):
+def do_one_ping(destAddr, timeout, seq_num):
     icmp = socket.getprotobyname("icmp")
     # SOCK_RAW is a powerful socket type. For more details: http://sock- raw.org/papers/sock_raw
     mySocket = socket.socket(socket.AF_INET, socket.SOCK_RAW, icmp)
     # use RNG for ID
-    myID = random.randint(0,0xFFFF)
-    send_time = send_one_ping(mySocket, destAddr, myID)
-    delay = receive_one_ping(mySocket, myID, timeout, destAddr, send_time) # TODO needs more than just delay
+    myID = os.getpid() & 0xFFFF
+    send_time = send_one_ping(mySocket, destAddr, myID, seq_num)
+    ping_response = receive_one_ping(mySocket, myID, timeout, destAddr, send_time, seq_num)
 
     mySocket.close()
-    return delay
+    return ping_response
 
 
-def ping(host, timeout=1):
-    dummy_RTT = random.randint(0,100) #TODO: remove when actual ping is implemented
-    # return {'rtt': dummy_RTT}
-
+def ping(host, timeout, seq_num):
     # timeout=1 means: If one second goes by without a reply from the server,
     # the client assumes that either the client's ping or the server's pong is lost
     dest = socket.gethostbyname(host)
-    return do_one_ping(dest, timeout)
+    print(f"Pinging {host} with Address: {dest} with Timeout: {timeout}s")
+    return do_one_ping(dest, timeout, seq_num)
 

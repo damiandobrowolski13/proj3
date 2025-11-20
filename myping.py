@@ -16,7 +16,6 @@ def main():
     parser.add_argument("--json", type=str, help="Write per-probe results to JSONL file")
     parser.add_argument("--qps-limit", type=float, default=1.0,
                         help="Max probe rate (queries per second)") #TODO: implement this limit later
-    parser.add_argument("--no-color", action="store_true", help="Disable color in output") #TODO: NEEDED?
     args = parser.parse_args()
 
     print(f"Pinging {args.target} with count={args.count}, interval={args.interval}s")
@@ -28,7 +27,7 @@ def do_pinging(args):
 
     for i in range(args.count):
         last_ping_ts = time.time()
-        ping_result = ping(args.target, args.timeout)
+        ping_result = ping(args.target, args.timeout, i)
         results.append(ping_result)
         logger.jsonl_write(ping_result)
         time.sleep(args.interval)
