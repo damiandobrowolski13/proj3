@@ -67,21 +67,23 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime):
         # case 1: Echo Reply (type 0) - payload has timestamp
         if icmp_type == 0 and icmp_id == ID:
             receiveTime = time.time()
-            response["rtt_ms"] = (receiveTime - sendTime) / 1000
-
             payload = recPacket[icmp_off + 8:]
             if len(payload) >= 8:
                 try:
                     ts_sent = struct.unpack("d", payload[:8])[0]
-                    rtt = time.time() - ts_sent
-                    print(f"Received RTT: {rtt:.3f}ms, calculated RTT: {response['rtt_ms']:.3f}ms")
+                    # compute RTT from payload timestamp (ms)
+                    # ignore late/other replies (use timestamp to match)
+                    if abs(ts_sent - sendTime) > 1.0:
+                        continue
+                    response["rtt_ms"] = (receiveTime - ts_sent) * 1000.0
                     # TODO decide what sendTime to use, in packet or from arguments
                 except struct.error:
-                    response["err"] =  "Bad payload"
+                    response["err"] = "Bad payload"
                     return response
             else:
                 response["err"] = "No timestamp in payload"
                 return response
+            return response
 
         # TODO: handle different response type and error code, display error message to the user
         # case 2: Time Exceeded (11) or Dest Unreachable (3)
@@ -95,6 +97,7 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime):
                 # ensure inner ICMP head + 8 Bs of inner payload present
                 if len(recPacket) >= inner_icmp_off + 16:
                     try:
+                        # unpack inner icmp head into fields
                         _, _, _, inner_id = struct.unpack("bbHHh", recPacket[inner_icmp_off:inner_icmp_off+8])
                     except struct.error:
                         response["err"] = "Bad inner ICMP"
@@ -104,19 +107,18 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime):
                         inner_payload = recPacket[inner_icmp_off + 8:inner_icmp_off + 16]
                         try: 
                             ts_sent = struct.unpack("d", inner_payload)[0]
-                            response["rtt_ms"] = time.time() - ts_sent # TODO: do we care about non-EchoReply RTTs?
+                            response["rtt_ms"] = (time.time() - ts_sent) * 1000.0 # TODO: do we care about non-EchoReply RTTs?
                             return response
                         except struct.error:
                             response["err"] = "Unable to unpack payload into ts_send"
                             return response
             # return descriptive error msgs
             if icmp_type == 3:
-                response["err"] =  f"Destination unreachable (code={icmp_code}) from {src_ip}"
-                return response
+                response["err"] = f"Destination unreachable (code={icmp_code}) from {src_ip}"
             else:
                 # time exceeded w/out matching inner packet
-                response["err"] =  f"Time exceeded from {src_ip}"
-                return response
+                response["err"] = f"Time exceeded from {src_ip}"
+            return response
             
         # for other cases of ICMP types, ignore/wait for timeout
 
