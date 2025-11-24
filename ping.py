@@ -4,8 +4,6 @@ import sys
 import struct
 import time
 import select
-import binascii
-import random
 
 ICMP_ECHO_REQUEST = 8
 
@@ -33,6 +31,39 @@ def checksum(string):
 
     return answer
 
+def calculate_icmp_checksum(packet):
+    """
+    Calculate the checksum for an ICMP packet.
+        packet: ICMP header bytes with checksum field set to 0 + payload
+    """
+    # Calculate the checksum on the header + data
+    myChecksum = checksum(packet.decode('latin-1'))
+
+    # Convert to network byte order
+    if sys.platform == 'darwin':
+        myChecksum = socket.htons(myChecksum) & 0xffff
+    else:
+        myChecksum = socket.htons(myChecksum)
+
+    return myChecksum
+
+
+def verify_icmp_checksum(packet):
+    """
+    Verify the checksum of a received ICMP packet.
+        packet: The ICMP packet bytes (header + data)
+    """
+    # Extract the received checksum (bytes 2-3 of ICMP header)
+    received_checksum = struct.unpack("H", packet[2:4])[0]
+
+    # Zero out the checksum field for recalculation
+    packet_with_zero_checksum = packet[:2] + b'\x00\x00' + packet[4:]
+
+    # Calculate what the checksum should be
+    calculated_checksum = calculate_icmp_checksum(packet_with_zero_checksum)
+
+    return received_checksum == calculated_checksum
+
 # EXAMPLE FIELDS FOR RESPONSE
 # {"tool":"ping","ts_send":..., "ts_recv":..., "dst":"example.com","dst_ip":"93.184.216.34",
 # "seq":12,"ttl_reply":55,"rtt_ms":23.4,"icmp_type":0,"icmp_code":0,"err":null}
@@ -41,8 +72,7 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime, seq_num):
     response = {
         "ts_send": sendTime,
         "dst_ip": destAddr,
-        "id": ID,
-        "size": 0, #TODO implement this IF needed
+        "id": ID
     }
 
     while 1:
@@ -57,26 +87,41 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime, seq_num):
         # 1st B of IPv4 head = v.(4b) + head_len(4b)
         ip_head_len = (recPacket[0] & 0x0F) * 4
         # 8th B of IPv4 head = TTL(8b)
-        response["ttl_reply"] = recPacket[8]
+        response_ttl = recPacket[8]
         # ICMP starts @ offset ip_head_len (b/c it's the IP payload)
         icmp_off = ip_head_len
+        # Extract the entire ICMP packet (header + payload)
+        icmp_packet = recPacket[icmp_off:]
+
+        # Verify the checksum of the received ICMP packet
+        if not verify_icmp_checksum(icmp_packet):
+            print(f"Invalid checksum from {src_ip}")
+            continue # ignore invalid checksum packets
+
         # icmp header is 1st 8 Bs of icmp pkt
-        icmp_head = recPacket[icmp_off:icmp_off+8]
+        icmp_head = icmp_packet[:8]
         icmp_type, icmp_code, icmp_cksum, icmp_id, icmp_seq = struct.unpack("bbHHh", icmp_head)
-        
+
+        if icmp_seq != seq_num:
+            continue # ignore packets with wrong sequence number
+
+        response["icmp_type"] = icmp_type
+        response["icmp_code"] = icmp_code
+
         # case 1: Echo Reply (type 0) - payload has timestamp
-        if icmp_type == 0 and icmp_id == ID and icmp_seq == seq_num:
+        if icmp_type == 0 and icmp_id == ID:
             receiveTime = time.time()
-            payload = recPacket[icmp_off + 8:]
+            payload = icmp_packet[8:]
+            response["ttl_reply"] = response_ttl
+            response["size"] = len(recPacket)
             if len(payload) >= 8:
                 try:
-                    ts_sent = struct.unpack("d", payload[:8])[0]
+                    ts_sent_payload = struct.unpack("d", payload[:8])[0]
                     # compute RTT from payload timestamp (ms)
                     # ignore late/other replies (use timestamp to match)
-                    if abs(ts_sent - sendTime) > 1.0:
-                        continue
-                    response["rtt_ms"] = (receiveTime - ts_sent) * 1000.0
-                    # TODO decide what sendTime to use, in packet or from arguments
+                    if ts_sent_payload != sendTime:
+                        print(f"Warning: Timestamp mismatch: payload_ts: {ts_sent_payload} != send_ts: {sendTime}")
+                    response["rtt_ms"] = (receiveTime - sendTime) * 1000.0
                 except struct.error:
                     response["err"] = "Bad payload"
                     return response
@@ -85,7 +130,6 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime, seq_num):
                 return response
             return response
 
-        # TODO: handle different response type and error code, display error message to the user
         # case 2: Time Exceeded (11) or Dest Unreachable (3)
         # routers incl original IP head + 1st 8 Bs of original payload
         if icmp_type in (11, 3):
@@ -104,14 +148,8 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime, seq_num):
                         return response
                     # if inner_id matches our ID, extract original timestamp & compute RTT
                     if inner_id == ID:
-                        inner_payload = recPacket[inner_icmp_off + 8:inner_icmp_off + 16]
-                        try: 
-                            ts_sent = struct.unpack("d", inner_payload)[0]
-                            response["rtt_ms"] = (time.time() - ts_sent) * 1000.0 # TODO: do we care about non-EchoReply RTTs?
-                            return response
-                        except struct.error:
-                            response["err"] = "Unable to unpack payload into ts_send"
-                            return response
+                        response["rtt_ms"] = (time.time() - sendTime) * 1000.0  #
+                        return response
             # return descriptive error msgs
             if icmp_type == 3:
                 response["err"] = f"Destination unreachable (code={icmp_code}) from {src_ip}"
@@ -128,21 +166,16 @@ def send_one_ping(mySocket, destAddr, ID, seq_num):
 
     # Header is type (8), code (8), checksum (16), id (16), sequence (16)
     # Make a dummy header with a 0 checksum
-    myChecksum = 0
-    # struct -- Interpret strings as packed binary data
-    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, seq_num)
+    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, 0, ID, seq_num)
     data = struct.pack("d", timestamp)
-    # Calculate the checksum on the data and the dummy header.
-    myChecksum = checksum((header + data).decode('latin-1')) # latin-1 fixes issue with str() conversion of bytes & python 3
-    # Get the right checksum, and put in the header
-    if sys.platform == 'darwin':
-        # Convert 16-bit integers from host to network byte order
-        myChecksum = socket.htons(myChecksum) & 0xffff
-    else:
-        myChecksum = socket.htons(myChecksum)
 
+    # Calculate the checksum using the helper function
+    myChecksum = calculate_icmp_checksum(header + data)
+
+    # Rebuild header with the correct checksum
     header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, seq_num)
     packet = header + data
+
     # AF_INET address must be tuple, not str # Both LISTS and TUPLES consist of a number of objects
     mySocket.sendto(packet, (destAddr, 1))
     # which can be referenced by their position number within the object.
@@ -165,6 +198,6 @@ def ping(host, timeout, seq_num):
     # timeout=1 means: If one second goes by without a reply from the server,
     # the client assumes that either the client's ping or the server's pong is lost
     dest = socket.gethostbyname(host)
-    print(f"Pinging {host} with Address: {dest} with Timeout: {timeout}s")
+    # print(f"Pinging {host} with Address: {dest} with Timeout: {timeout}s")
     return do_one_ping(dest, timeout, seq_num)
 

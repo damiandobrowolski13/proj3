@@ -15,7 +15,7 @@ def main():
     parser.add_argument("--timeout", type=float, default=1.0, help="Per-probe timeout (s)")
     parser.add_argument("--json", type=str, help="Write per-probe results to JSONL file")
     parser.add_argument("--qps-limit", type=float, default=1.0,
-                        help="Max probe rate (queries per second)") #TODO: implement this limit later
+                        help="Max probe rate (queries per second)")
     args = parser.parse_args()
 
     print(f"Pinging {args.target} with count={args.count}, interval={args.interval}s")
@@ -28,14 +28,17 @@ def do_pinging(args):
     for i in range(args.count):
         last_ping_ts = time.time()
         ping_result = ping(args.target, args.timeout, i)
+        print_ping_result(ping_result)
         results.append(ping_result)
         logger.jsonl_write(ping_result)
         time.sleep(args.interval)
 
+        # enforce QPS limit
         time_since_last_ping = time.time() - last_ping_ts
-        time_to_next_ping = args.interval - time_since_last_ping
-        if time_to_next_ping > 0:
-            time.sleep(time_to_next_ping)
+        if args.qps_limit > 0:
+            min_period = 1.0 / args.qps_limit
+            if time_since_last_ping < min_period:
+                time.sleep(min_period - time_since_last_ping)
 
 
     # Compute and print summary metrics
@@ -46,9 +49,12 @@ def print_ping_result(result):
     # example ping output: Reply from 142.251.214.142: bytes=32 time=15ms TTL=58
 
     if result.get("err") is not None:
-        print(f"Error: {result['err']}")
+        err_msg = f"Error: {result['err']}"
+        if result.get("icmp_type") is not None and result.get("icmp_code") is not None:
+            err_msg += f" (ICMP type={result['icmp_type']}, code={result['icmp_code']})"
+        print(err_msg)
     else:
-        print(f"Reply from {result['dst_ip']}: bytes={result['size']} time={result['rtt_ms']}ms TTL={result['ttl_reply']}")
+        print(f"Reply from {result['dst_ip']}: bytes={result['size']} time={result['rtt_ms']:.3f}ms TTL={result['ttl_reply']}")
 
 def print_summary(target, results):
     """Print end-of-run summary like standard ping: min/avg/max/stddev RTT and loss %."""
@@ -78,7 +84,7 @@ def print_summary(target, results):
         max_rtt = max(rtts)
         avg_rtt = sum(rtts) / received
 
-        # Calculate stddev TODO: review this logic
+        # Calculate stddev
         if received > 1:
             variance = sum((x - avg_rtt) ** 2 for x in rtts) / (received - 1)
             stddev_rtt = variance ** 0.5
