@@ -18,6 +18,21 @@ def main():
     args = parser.parse_args()
 
     # TODO: Implement traceroute logic
+
+    # import traceroute file & pass args
+    import traceroute as tr
+
+    tr.MAX_HOPS = args.max_ttl
+    tr.TIMEOUT = args.timeout
+    tr.TRIES = args.probes
+    tr.FLOW_ID = args.flow_id
+    tr.JSON_PATH = args.json
+    tr.QPS_LIMIT = args.qps_limit
+    tr.RDNS = args.rdns
+    tr.NO_RESOLVE = args.no_resolve
+
+    # call traceroute entrypoint
+    tr.get_route(args.target)
     print(f"Traceroute to {args.target} with max-ttl={args.max_ttl}, probes={args.probes}")
 
 if __name__ == "__main__":
