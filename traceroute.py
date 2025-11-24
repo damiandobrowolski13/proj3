@@ -64,31 +64,109 @@ def build_packet():
 def get_route(hostname):
     icmp = socket.getprotobyname("icmp")
     timeLeft = TIMEOUT
+    
     for ttl in range(1, MAX_HOPS):
         for tries in range(TRIES):
-
-            # TODO: create ICMP socket, connect to destination IP, set timeout and time-to-live
-
+            send_sock = None
+            recv_sock = None
             try:
+                # create sockets & set TTL/timeout
+                dest_ip = socket.gethostbyname(hostname)
+                send_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, icmp)
+                recv_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, icmp)
+                # recv timeout for this attempt
+                recv_sock.settimeout(timeLeft)
+                send_sock.setsockopt(socket.SOL_IP, socket.IP_TTL, ttl)
 
-                # TODO: create ICMP ping packet, record the time delay of getting response detect timeout
+                # build ICMP packet & send
+                pkt = build_packet()
+                send_time = time.time()
+                send_sock.sendto(pkt, (dest_ip, 0))
 
-                pass
+                # blocking recv w/ timeout on recv_sock
+                recPacket, addr = recv_sock.recvfrom(4096)
+                recv_time = time.time()
+                # update remaining timeLeft
+                timeLeft = max(0.0, timeLeft - (recv_time - send_time))
 
-            except:
+            except socket.timeout:
+                # timed out for this probe, print star * continue tries
+                print(f"{ttl:2d} *")
                 continue
             else:
+                # parse & handle different response types 
+                try:
+                    src = addr[0]
+                    if len(recPacket) < 20:
+                        print(f"{ttl:2d} {src} (short pkt)")
+                        continue
 
-                # TODO: parse and handle different response type
-                # Hint: use wireshark to get the byte location of the response type
+                    ihl = (recPacket[0] & 0x0F) * 4
+                    if len(recPacket) < ihl + 8:
+                        print(f"{ttl:2d} {src} (short icmp)")
+                        continue
 
-                pass
+                    icmp_off = ihl
+                    try:
+                        r_type, r_code, r_cksum, r_id, r_seq = struct.unpack("bbHHh", recPacket[icmp_off:icmp_off + 8])
+                    except struct.error:
+                        print(f"{ttl:2d} {src} (unpack error)")
+                        continue
 
+                    if r_type == 0:
+                        # echo reply (dest reached)
+                        payload = recPacket[icmp_off + 8:]
+                        if len(payload) >= 8:
+                            try:
+                                ts_sent = struct.unpack("d", payload[:8])[0]
+                                rtt = (recv_time - ts_sent) * 1000.0
+                            except Exception:
+                                rtt = (recv_time - send_time) * 1000.0
+                        else:
+                            rtt = (recv_time - send_time) * 1000.0
+                        print(f"{ttl:2d} {src} {rtt:.3f}ms")
+                        return
+
+                    if r_type in (11, 3):
+                        # Time exceeded or dest unreachable: parse inner packet
+                        inner_off = icmp_off + 8
+                        if len(recPacket) >= inner_off + 20:
+                            inner_ihl = (recPacket[inner_off] & 0x0F) * 4
+                            inner_icmp_off = inner_off + inner_ihl
+                            if len(recPacket) >= inner_icmp_off + 16:
+                                try:
+                                    _, _, _, inner_id, inner_seq = struct.unpack("bbHHh", recPacket[inner_icmp_off:inner_icmp_off + 8])
+                                    inner_payload = recPacket[inner_icmp_off + 8:inner_icmp_off + 16]
+                                    if len(inner_payload) >= 8:
+                                        try:
+                                            ts_sent = struct.unpack("d", inner_payload[:8])[0]
+                                            rtt = (recv_time - ts_sent) * 1000.0
+                                        except Exception:
+                                            rtt = (recv_time - send_time) * 1000.0
+                                    else:
+                                        rtt = (recv_time - send_time) * 1000.0
+                                    print(f"{ttl:2d} {src} {rtt:.3f} ms")
+                                except struct.error:
+                                    print(f"{ttl:2d} {src} *")
+                            else:
+                                print(f"{ttl:2d} {src} *")
+                        else:
+                            print(f"{ttl:2d} {src} *")
+                    else:
+                        print(f"{ttl:2d} {src} (type={r_type} code={r_code})")
+                except Exception:
+                    print(f"{ttl:2d} *")
             finally:
-
-                # TODO: close the socket
-
-                pass
-
+                # close sockets
+                try:
+                    if send_sock:
+                        send_sock.close()
+                except:
+                    pass
+                try:
+                    if recv_sock:
+                        recv_sock.close()
+                except:
+                    pass
 
 get_route("google.com")
