@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 import argparse
+import json
+import time
+import os
+
+import traceroute as tr
+
 
 def main():
     parser = argparse.ArgumentParser(description="ICMP Traceroute")
@@ -14,26 +20,29 @@ def main():
     parser.add_argument("--json", type=str, help="Write per-probe results to JSONL file")
     parser.add_argument("--qps-limit", type=float, default=1.0,
                         help="Max probe rate (queries per second)")
-    parser.add_argument("--no-color", action="store_true", help="Disable color in output")
     args = parser.parse_args()
 
-    # TODO: Implement traceroute logic
-
-    # import traceroute file & pass args
-    import traceroute as tr
-
-    tr.MAX_HOPS = args.max_ttl
-    tr.TIMEOUT = args.timeout
-    tr.TRIES = args.probes
-    tr.FLOW_ID = args.flow_id
-    tr.JSON_PATH = args.json
-    tr.QPS_LIMIT = args.qps_limit
-    tr.RDNS = args.rdns
-    tr.NO_RESOLVE = args.no_resolve
-
-    # call traceroute entrypoint
-    tr.get_route(args.target)
     print(f"Traceroute to {args.target} with max-ttl={args.max_ttl}, probes={args.probes}")
+    do_traceroute(args)
+
+def do_traceroute(args):
+    logger = JsonlLogger(file_name=args.json)
+
+    tr.get_route(args.target, args.max_ttl, args.timeout, args.probes, args.qps_limit)
+
+class JsonlLogger:
+    def __init__(self, file_name=None):
+        self.file_name = file_name
+        if file_name is not None:
+            self.path = os.path.join(os.getcwd(), file_name)
+
+    def jsonl_write(self, obj):
+        if self.file_name is None:
+            return
+
+        obj.setdefault("ts", time.time())
+        with open(self.path, "a") as f:
+            f.write(json.dumps(obj) + "\n")
 
 if __name__ == "__main__":
     main()

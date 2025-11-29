@@ -7,9 +7,6 @@ import select
 import binascii
 
 ICMP_ECHO_REQUEST = 8
-MAX_HOPS = 30
-TIMEOUT = 2.0
-TRIES = 2
 # The packet that we shall send to each router along the path is the ICMP echo # request packet, which is exactly what we had used in the ICMP ping exercise. # We shall use the same packet that we built in the Ping exercise
 
 
@@ -61,12 +58,12 @@ def build_packet():
     return packet
 
 
-def get_route(hostname):
+def get_route(hostname, max_hops, timeout, probes, qps_limit):
     icmp = socket.getprotobyname("icmp")
-    timeLeft = TIMEOUT
+    timeLeft = timeout
     
-    for ttl in range(1, MAX_HOPS):
-        for tries in range(TRIES):
+    for ttl in range(1, max_hops):
+        for tries in range(probes):
             send_sock = None
             recv_sock = None
             try:
@@ -91,7 +88,7 @@ def get_route(hostname):
 
             except socket.timeout:
                 # timed out for this probe, print star * continue tries
-                print(f"{ttl:2d} *")
+                print(f"{ttl:2d} * (timeout)")
                 continue
             else:
                 # parse & handle different response types 
@@ -101,21 +98,21 @@ def get_route(hostname):
                         print(f"{ttl:2d} {src} (short pkt)")
                         continue
 
-                    ihl = (recPacket[0] & 0x0F) * 4
-                    if len(recPacket) < ihl + 8:
+                    internet_header_length = (recPacket[0] & 0x0F) * 4
+                    if len(recPacket) < internet_header_length + 8:
                         print(f"{ttl:2d} {src} (short icmp)")
                         continue
 
-                    icmp_off = ihl
+                    icmp_offset = internet_header_length
                     try:
-                        r_type, r_code, r_cksum, r_id, r_seq = struct.unpack("bbHHh", recPacket[icmp_off:icmp_off + 8])
+                        r_type, r_code, r_cksum, r_id, r_seq = struct.unpack("bbHHh", recPacket[icmp_offset:icmp_offset + 8])
                     except struct.error:
                         print(f"{ttl:2d} {src} (unpack error)")
                         continue
 
                     if r_type == 0:
                         # echo reply (dest reached)
-                        payload = recPacket[icmp_off + 8:]
+                        payload = recPacket[icmp_offset + 8:]
                         if len(payload) >= 8:
                             try:
                                 ts_sent = struct.unpack("d", payload[:8])[0]
@@ -124,12 +121,12 @@ def get_route(hostname):
                                 rtt = (recv_time - send_time) * 1000.0
                         else:
                             rtt = (recv_time - send_time) * 1000.0
-                        print(f"{ttl:2d} {src} {rtt:.3f}ms")
+                        print(f"ECHO {ttl:2d} {src} {rtt:.3f}ms")
                         return
 
                     if r_type in (11, 3):
                         # Time exceeded or dest unreachable: parse inner packet
-                        inner_off = icmp_off + 8
+                        inner_off = icmp_offset + 8
                         if len(recPacket) >= inner_off + 20:
                             inner_ihl = (recPacket[inner_off] & 0x0F) * 4
                             inner_icmp_off = inner_off + inner_ihl
@@ -155,7 +152,7 @@ def get_route(hostname):
                     else:
                         print(f"{ttl:2d} {src} (type={r_type} code={r_code})")
                 except Exception:
-                    print(f"{ttl:2d} *")
+                    print(f"{ttl:2d} * (Exception)")
             finally:
                 # close sockets
                 try:
@@ -168,5 +165,3 @@ def get_route(hostname):
                         recv_sock.close()
                 except:
                     pass
-
-get_route("google.com")
