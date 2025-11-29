@@ -66,6 +66,8 @@ def get_route(hostname, max_hops, timeout, probes, qps_limit):
         for tries in range(probes):
             send_sock = None
             recv_sock = None
+            time.sleep(1.0 / qps_limit) # naïve QPS limit
+
             try:
                 # create sockets & set TTL/timeout
                 dest_ip = socket.gethostbyname(hostname)
@@ -144,11 +146,11 @@ def get_route(hostname, max_hops, timeout, probes, qps_limit):
                                         rtt = (recv_time - send_time) * 1000.0
                                     print(f"{ttl:2d} {src} {rtt:.3f} ms")
                                 except struct.error:
-                                    print(f"{ttl:2d} {src} *")
+                                    print(f"{ttl:2d} {src} * (unpack error)")
                             else:
-                                print(f"{ttl:2d} {src} *")
+                                print(f"{ttl:2d} {src} * (payload too small)")
                         else:
-                            print(f"{ttl:2d} {src} *")
+                            print(f"{ttl:2d} {src} * (packet too small)")
                     else:
                         print(f"{ttl:2d} {src} (type={r_type} code={r_code})")
                 except Exception:
