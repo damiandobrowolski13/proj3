@@ -20,13 +20,17 @@ def main():
     parser.add_argument("--json", type=str, help="Write per-probe results to JSONL file")
     parser.add_argument("--qps-limit", type=float, default=1.0,
                         help="Max probe rate (queries per second)")
+    parser.add_argument("--i-accept-the-risk", action="store_true", help="Allows QPS > 1")
     args = parser.parse_args()
 
     do_traceroute(args)
 
 def do_traceroute(args):
-    logger = JsonlLogger(file_name=args.json)
+    if args.qps_limit > 1 and not args.i_accept_the_risk:
+        print("WARNING: QPS limit > 1, requires --i-accept-the-risk")
+        return
 
+    logger = JsonlLogger(file_name=args.json)
     tr.get_route(args.target, args.max_ttl, args.timeout, args.probes, args.qps_limit, logger)
 
 class JsonlLogger:
