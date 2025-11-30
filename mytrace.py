@@ -22,13 +22,12 @@ def main():
                         help="Max probe rate (queries per second)")
     args = parser.parse_args()
 
-    print(f"Traceroute to {args.target} with max-ttl={args.max_ttl}, probes={args.probes}")
     do_traceroute(args)
 
 def do_traceroute(args):
     logger = JsonlLogger(file_name=args.json)
 
-    tr.get_route(args.target, args.max_ttl, args.timeout, args.probes, args.qps_limit)
+    tr.get_route(args.target, args.max_ttl, args.timeout, args.probes, args.qps_limit, logger)
 
 class JsonlLogger:
     def __init__(self, file_name=None):
