@@ -5,39 +5,36 @@ import struct
 import time
 
 from mytrace import JsonlLogger
+from ping import calculate_icmp_checksum
 
 ICMP_ECHO_REQUEST = 8
 
-def build_packet():
+def build_packet(flow_id=0):
     # In the sendOnePing() method of the ICMP Ping exercise ,firstly the header of our
     # packet to be sent was made, secondly the checksum was appended to the header and
     # then finally the complete packet was sent to the destination.
     # Make the header in a similar way to the ping exercise.
     # Append checksum to the header.
     # So the function ending should look like this
-    ID = os.getpid() & 0xFFFF
+    # Paris-style: use flow_id as identifier if provided, otherwise use PID
+    ID = flow_id if flow_id != 0 else (os.getpid() & 0xFFFF)
     header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, 0, ID, 1)
     data = struct.pack("d", time.time())
     # Calculate the checksum on the data and the dummy header.
-    myChecksum = checksum(str(header + data))
-    # Get the right checksum, and put in the header
-    if sys.platform == 'darwin':
-        # Convert 16-bit integers from host to network byte order
-        myChecksum = socket.htons(myChecksum) & 0xffff
-    else:
-        myChecksum = socket.htons(myChecksum)
+    # Note: calculate_icmp_checksum already handles htons conversion
+    myChecksum = calculate_icmp_checksum(header + data)
 
     header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, 1)
     packet = header + data
     return packet
 
 
-def get_route(hostname, max_ttl, timeout, probes, qps_limit, logger: JsonlLogger):
+def get_route(hostname, max_ttl, timeout, probes, qps_limit, flow_id, logger: JsonlLogger):
     dest_ip = socket.gethostbyname(hostname)
     icmp = socket.getprotobyname("icmp")
     responses = []
 
-    print(f"Traceroute to {hostname} ({dest_ip}) with max-ttl={max_ttl}, probes={probes}, timeout={timeout}s, qps={qps_limit}")
+    print(f"Traceroute to {hostname} ({dest_ip}) with max-ttl={max_ttl}, probes={probes}, timeout={timeout}s, qps={qps_limit}, flow_id={flow_id}")
 
     for ttl in range(1, max_ttl + 1):
         for tries in range(probes):
@@ -54,7 +51,7 @@ def get_route(hostname, max_ttl, timeout, probes, qps_limit, logger: JsonlLogger
                 send_sock.setsockopt(socket.SOL_IP, socket.IP_TTL, ttl)
 
                 # build ICMP packet & send
-                pkt = build_packet()
+                pkt = build_packet(flow_id)
                 send_time = time.time()
                 send_sock.sendto(pkt, (dest_ip, 0))
 
@@ -214,26 +211,3 @@ def print_response(response):
 
     print(msg)
 
-
-def checksum(string):
-    csum = 0
-    countTo = (len(string) // 2) * 2
-    count = 0
-
-    while count < countTo:
-        thisVal = ord(string[count + 1]) * 256 + ord(string[count])
-        csum = csum + thisVal
-        csum = csum & 0xffffffff
-        count = count + 2
-
-    if countTo < len(string):
-        csum = csum + ord(string[len(string) - 1])
-        csum = csum & 0xffffffff
-
-    csum = (csum >> 16) + (csum & 0xffff)
-    csum = csum + (csum >> 16)
-    answer = ~csum
-    answer = answer & 0xffff
-    answer = answer >> 8 | (answer << 8 & 0xff00)
-
-    return answer

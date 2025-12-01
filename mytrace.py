@@ -31,7 +31,7 @@ def do_traceroute(args):
         return
 
     logger = JsonlLogger(file_name=args.json)
-    tr.get_route(args.target, args.max_ttl, args.timeout, args.probes, args.qps_limit, logger)
+    tr.get_route(args.target, args.max_ttl, args.timeout, args.probes, args.qps_limit, args.flow_id, logger)
 
 class JsonlLogger:
     def __init__(self, file_name=None):
