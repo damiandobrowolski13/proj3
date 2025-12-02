@@ -3,9 +3,35 @@ import os
 import sys
 import struct
 import time
+import concurrent.futures
 
-from mytrace import JsonlLogger
+# from mytrace import JsonlLogger
 from ping import calculate_icmp_checksum
+
+# simple per-process cache for reverse lookups
+_RDNS_CACHE = {}
+
+def reverse_lookup(ip, timeout_ms=200):
+    """return PTR name for ip or None on timeout/error, using cache"""
+    if ip in _RDNS_CACHE:
+        return _RDNS_CACHE[ip]
+    if timeout_ms <= 0:
+        try:
+            name = socket.gethostbyaddr(ip)[0]
+            _RDNS_CACHE[ip] = name
+            return name
+        except Exception:
+            _RDNS_CACHE[ip] = None
+            return None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(socket.gethostbyaddr, ip)
+        try:
+            name = fut.result(timeout=timeout_ms / 1000.0)[0]
+            _RDNS_CACHE[ip] = name
+            return name
+        except Exception:
+            _RDNS_CACHE[ip] = None
+            return None
 
 ICMP_ECHO_REQUEST = 8
 
@@ -15,32 +41,37 @@ def build_packet(flow_id=0):
     # then finally the complete packet was sent to the destination.
     # Make the header in a similar way to the ping exercise.
     # Append checksum to the header.
-    # So the function ending should look like this
     # Paris-style: use flow_id as identifier if provided, otherwise use PID
     ID = flow_id if flow_id != 0 else (os.getpid() & 0xFFFF)
-    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, 0, ID, 1)
+    header = struct.pack("!BBHHH", ICMP_ECHO_REQUEST, 0, 0, ID, 1)
     data = struct.pack("d", time.time())
     # Calculate the checksum on the data and the dummy header.
     # Note: calculate_icmp_checksum already handles htons conversion
     myChecksum = calculate_icmp_checksum(header + data)
 
-    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, 1)
+    header = struct.pack("!BBHHH", ICMP_ECHO_REQUEST, 0, myChecksum, ID, 1)
     packet = header + data
     return packet
 
 
-def get_route(hostname, max_ttl, timeout, probes, qps_limit, flow_id, logger: JsonlLogger):
+# def get_route(hostname, max_ttl, timeout, probes, qps_limit, flow_id, logger: JsonlLogger):
+def get_route(hostname, max_ttl, timeout, probes, qps_limit, flow_id, logger=None, no_resolve=False, rdns=False):
     dest_ip = socket.gethostbyname(hostname)
     icmp = socket.getprotobyname("icmp")
     responses = []
 
-    print(f"Traceroute to {hostname} ({dest_ip}) with max-ttl={max_ttl}, probes={probes}, timeout={timeout}s, qps={qps_limit}, flow_id={flow_id}")
+    print(f"Traceroute to {hostname} ({dest_ip}) with max-ttl={max_ttl}, probes={probes}, timeout={timeout}s, qps={qps_limit}, flow_id={flow_id}, no_resolve={no_resolve}, rdns={rdns}")
+
+    done = False
 
     for ttl in range(1, max_ttl + 1):
         for tries in range(probes):
+            probe_num = tries + 1
             send_sock = None
             recv_sock = None
-            time.sleep(1.0 / qps_limit)  # naïve QPS limit
+            # naïve QPS limit (avoid div-by-zero)
+            sleep_interval = (1.0 / qps_limit) if qps_limit > 0 else 0.0
+            time.sleep(sleep_interval)
 
             try:
                 # create sockets & set TTL/timeout
@@ -66,6 +97,8 @@ def get_route(hostname, max_ttl, timeout, probes, qps_limit, flow_id, logger: Js
                 }
                 print_response(response_record)
                 responses.append(response_record)
+                if logger:
+                    logger.jsonl_write(response_record)
                 continue
             else:
                 rtt = (recv_time - send_time) * 1000.0
@@ -73,17 +106,41 @@ def get_route(hostname, max_ttl, timeout, probes, qps_limit, flow_id, logger: Js
                 icmp_type, icmp_code, payload_timestamp, error = parse_response(recPacket)
 
                 response_record = {
+                    "dst": hostname,
+                    "dst_ip": dest_ip,
                     "ttl": ttl,
+                    "probe": probe_num,
+                    "flow_id": flow_id,
+                    "ts_send": send_time,
+                    "ts_recv": recv_time,
                     "src": src,
+                    "router_ip": src,
+                    "router_name": None,
                     "rtt": rtt,
                     "payload_ts": payload_timestamp,
                     "type": icmp_type,
                     "code": icmp_code,
                     "err": error
                 }
+                # responses.append(response_record)
+                # logger.jsonl_write(response_record)
+
+
+                # perform reverse DNS if requested and not disabled
+                if rdns and not no_resolve:
+                    name = reverse_lookup(src, timeout_ms=200)
+                    if name:
+                        response_record["router_name"] = name
+
                 responses.append(response_record)
-                logger.jsonl_write(response_record)
+                if logger:
+                    logger.jsonl_write(response_record)
                 print_response(response_record)
+
+                # stop early if destination replied
+                if icmp_type == 0 and src == dest_ip:
+                    done = True
+                    break
 
             finally:
                 # close sockets
@@ -97,6 +154,9 @@ def get_route(hostname, max_ttl, timeout, probes, qps_limit, flow_id, logger: Js
                         recv_sock.close()
                 except:
                     pass
+
+        if done:
+            break
 
     summarize_responses(responses)
 
@@ -148,7 +208,7 @@ def parse_response(recPacket):
 
         icmp_offset = internet_header_length
         try:
-            r_type, r_code, r_cksum, r_id, r_seq = struct.unpack("bbHHh", recPacket[icmp_offset:icmp_offset + 8])
+            r_type, r_code, r_cksum, r_id, r_seq = struct.unpack("!BBHHH", recPacket[icmp_offset:icmp_offset + 8])
         except struct.error:
             return icmp_type, icmp_code, payload_timestamp, "unpack error"
 
@@ -170,20 +230,24 @@ def parse_response(recPacket):
             if len(recPacket) >= inner_off + 20:
                 inner_ihl = (recPacket[inner_off] & 0x0F) * 4
                 inner_icmp_off = inner_off + inner_ihl
-                if len(recPacket) >= inner_icmp_off + 16:
+                                # inner packet: try to parse inner ICMP header if at least 8 bytes present
+                if len(recPacket) >= inner_icmp_off + 8:
                     try:
-                        _, _, _, inner_id, inner_seq = struct.unpack("bbHHh",
-                                                                     recPacket[inner_icmp_off:inner_icmp_off + 8])
+                        _, _, _, inner_id, inner_seq = struct.unpack("!BBHHH", recPacket[inner_icmp_off:inner_icmp_off + 8])
+                        # inner payload may be truncated; try to extract timestamp if available
                         inner_payload = recPacket[inner_icmp_off + 8:inner_icmp_off + 16]
                         if len(inner_payload) >= 8:
                             try:
                                 payload_timestamp = struct.unpack("d", inner_payload[:8])[0]
                             except Exception:
                                 error = "timestamp unpack error"
+                        else:
+                            # truncated payload is OK: not a fatal error for traceroute stats
+                            error = None
                     except struct.error:
                         error = "unpack error"
                 else:
-                    error = "payload too small"
+                    error = "packet too small"
             else:
                 error = "packet too small"
     except Exception:
@@ -198,13 +262,19 @@ def print_response(response):
     if response.get('ttl'):
         msg += f"{response['ttl']:2d}"
 
-    if response.get('src'):
-        msg += f" {response['src']}"
+    if response.get('router_ip'):
+        ip = response['router_ip']
+        name = response.get('router_name')
+        if name:
+            msg += f" {name} ({ip})"
+        else:
+            msg += f" {ip}"
     else:
         msg += " *"
 
-    if response.get('rtt'):
-        msg += f" {response['rtt']:.3f} ms"
+    rtt_val = response.get('rtt')
+    if rtt_val is not None:
+        msg += f" {rtt_val:.3f} ms"
 
     if response.get('err'):
         msg += f" ({response['err']})"

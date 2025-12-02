@@ -5,7 +5,22 @@ import time
 import os
 
 from ping import ping
+from jsonhelper import jwrite
 
+# json logging
+class JsonlLogger:
+    def __init__(self, file_name=None):
+        self.file_name = file_name
+        if file_name is not None:
+            self.path = os.path.join(os.getcwd(), file_name)
+
+    def jsonl_write(self, obj):
+        if self.file_name is None:
+            return
+        # ensure standard fields: tool and dst (if present in runtime use obj value)
+        default = {"tool": "ping"}
+        # if caller provided 'dst' in obj it will be kept, else nothing forced
+        jwrite(self.path, obj, default_fields=default)
 
 def main():
     parser = argparse.ArgumentParser(description="ICMP Ping")
@@ -59,7 +74,7 @@ def print_ping_result(result):
             err_msg += f" (ICMP type={result['icmp_type']}, code={result['icmp_code']})"
         print(err_msg)
     else:
-        print(f"Reply from {result['dst_ip']}: bytes={result['size']} time={result['rtt_ms']:.3f}ms TTL={result['ttl_reply']}")
+        print(f"Reply from {result['dst_ip']}: bytes={result['size']} time={result['rtt']:.3f}ms TTL={result['ttl_reply']}")
 
 def print_summary(target, results):
     """Print end-of-run summary like standard ping: min/avg/max/stddev RTT and loss %."""
@@ -68,10 +83,10 @@ def print_summary(target, results):
         print("No packets sent.")
         return
 
-    # Extract successful RTTs (where rtt_ms exists and is not None, and no error)
+    # Extract successful RTTs (where rtt exists and is not None, and no error)
     rtts = []
     for r in results:
-        rtt = r.get("rtt_ms")
+        rtt = r.get("rtt")
         err = r.get("err")
         if rtt is not None and err is None:
             rtts.append(rtt)

@@ -5,7 +5,20 @@ import time
 import os
 
 import traceroute as tr
+from jsonhelper import jwrite
 
+# json logging
+class JsonlLogger:
+    def __init__(self, file_name=None):
+        self.file_name = file_name
+        if file_name is not None:
+            self.path = os.path.join(os.getcwd(), file_name)
+
+    def jsonl_write(self, obj):
+        if self.file_name is None:
+            return
+        # ensure "tool" field and write via helper
+        jwrite(self.path, obj, default_fields={"tool": "trace"})
 
 def main():
     parser = argparse.ArgumentParser(description="ICMP Traceroute")
@@ -31,7 +44,10 @@ def do_traceroute(args):
         return
 
     logger = JsonlLogger(file_name=args.json)
-    tr.get_route(args.target, args.max_ttl, args.timeout, args.probes, args.qps_limit, args.flow_id, logger)
+    # pass no-resolve/rdns through to traceroute
+    tr.get_route(args.target, args.max_ttl, args.timeout, args.probes,
+                 args.qps_limit, args.flow_id, logger,
+                 no_resolve=args.n, rdns=args.rdns)
 
 class JsonlLogger:
     def __init__(self, file_name=None):

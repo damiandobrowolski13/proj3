@@ -36,17 +36,10 @@ def calculate_icmp_checksum(packet):
     Calculate the checksum for an ICMP packet.
         packet: ICMP header bytes with checksum field set to 0 + payload
     """
-    # Calculate the checksum on the header + data
+    # checksum() expects str, keep existing decode to avoid larger refactor
     myChecksum = checksum(packet.decode('latin-1'))
-
-    # Convert to network byte order
-    if sys.platform == 'darwin':
-        myChecksum = socket.htons(myChecksum) & 0xffff
-    else:
-        myChecksum = socket.htons(myChecksum)
-
-    return myChecksum
-
+    # return raw 16-bit checksum (do not htons here), struct with "!" will emit network order
+    return myChecksum & 0xffff
 
 def verify_icmp_checksum(packet):
     """
@@ -54,7 +47,7 @@ def verify_icmp_checksum(packet):
         packet: The ICMP packet bytes (header + data)
     """
     # Extract the received checksum (bytes 2-3 of ICMP header)
-    received_checksum = struct.unpack("H", packet[2:4])[0]
+    received_checksum = struct.unpack("!H", packet[2:4])[0]
 
     # Zero out the checksum field for recalculation
     packet_with_zero_checksum = packet[:2] + b'\x00\x00' + packet[4:]
@@ -100,7 +93,8 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime, seq_num):
 
         # icmp header is 1st 8 Bs of icmp pkt
         icmp_head = icmp_packet[:8]
-        icmp_type, icmp_code, icmp_cksum, icmp_id, icmp_seq = struct.unpack("bbHHh", icmp_head)
+        # network (big-endian) order: type(1), code(1), checksum(2), id(2), seq(2)
+        icmp_type, icmp_code, icmp_cksum, icmp_id, icmp_seq = struct.unpack("!BBHHH", icmp_head)
 
         if icmp_seq != seq_num:
             continue # ignore packets with wrong sequence number
@@ -121,7 +115,7 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime, seq_num):
                     # ignore late/other replies (use timestamp to match)
                     if ts_sent_payload != sendTime:
                         print(f"Warning: Timestamp mismatch: payload_ts: {ts_sent_payload} != send_ts: {sendTime}")
-                    response["rtt_ms"] = (receiveTime - sendTime) * 1000.0
+                    response["rtt"] = (receiveTime - sendTime) * 1000.0
                 except struct.error:
                     response["err"] = "Bad payload"
                     return response
@@ -141,14 +135,14 @@ def receive_one_ping(mySocket, ID, timeout, destAddr, sendTime, seq_num):
                 # ensure inner ICMP head + 8 Bs of inner payload present
                 if len(recPacket) >= inner_icmp_off + 16:
                     try:
-                        # unpack inner icmp head into fields
-                        _, _, _, inner_id = struct.unpack("bbHHh", recPacket[inner_icmp_off:inner_icmp_off+8])
+                        # unpack inner icmp head into fields (network order)
+                        _, _, _, inner_id, _ = struct.unpack("!BBHHH", recPacket[inner_icmp_off:inner_icmp_off+8])
                     except struct.error:
                         response["err"] = "Bad inner ICMP"
                         return response
                     # if inner_id matches our ID, extract original timestamp & compute RTT
                     if inner_id == ID:
-                        response["rtt_ms"] = (time.time() - sendTime) * 1000.0  #
+                        response["rtt"] = (receiveTime - sendTime) * 1000.0
                         return response
             # return descriptive error msgs
             if icmp_type == 3:
@@ -166,14 +160,14 @@ def send_one_ping(mySocket, destAddr, ID, seq_num):
 
     # Header is type (8), code (8), checksum (16), id (16), sequence (16)
     # Make a dummy header with a 0 checksum
-    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, 0, ID, seq_num)
+    header = struct.pack("!BBHHH", ICMP_ECHO_REQUEST, 0, 0, ID, seq_num)
     data = struct.pack("d", timestamp)
 
     # Calculate the checksum using the helper function
     myChecksum = calculate_icmp_checksum(header + data)
 
     # Rebuild header with the correct checksum
-    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, seq_num)
+    header = struct.pack("!BBHHH", ICMP_ECHO_REQUEST, 0, myChecksum, ID, seq_num)
     packet = header + data
 
     # AF_INET address must be tuple, not str # Both LISTS and TUPLES consist of a number of objects
