@@ -1,6 +1,9 @@
-# proj3
+# CS 340 Project 3
+## Authors: 
+Charles Kozel (QHP7002)
+Damian Dobrowolski (RNZ5773)
 
-## File
+## Files
 - `ping.py` — low-level ICMP send/receive: build/send Echo Request, verify replies, compute RTT, checksum handling
 - `traceroute.py` — TTL-based probing: build ICMP probes, set socket TTL, parse Time Exceeded / Echo Reply, extract inner packet timestamp when present
 - `myping.py` / `mytrace.py` — CLI frontends: parse args, enforce qps/interval, create JsonlLogger, call ping()/get_route()
