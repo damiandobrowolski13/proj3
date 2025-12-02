@@ -70,7 +70,8 @@ def summarize_ping(jsonl_path):
                 # skip bad lines
                 continue
             sent += 1
-            rtt = obj.get("rtt", obj.get("rtt"))
+            # accept either unified "rtt" or legacy "rtt_ms"
+            rtt = obj.get("rtt", obj.get("rtt_ms"))
             # only count RTTs for successful probes (no error)
             if rtt is not None and obj.get("err") is None:
                 stats.add(float(rtt))
@@ -98,7 +99,8 @@ def summarize_trace(jsonl_path):
             if ttl is None:
                 continue
             hops[ttl]["total"] += 1
-            rtt = obj.get("rtt", obj.get("rtt"))
+            # accept either unified "rtt" or legacy "rtt_ms"
+            rtt = obj.get("rtt", obj.get("rtt_ms"))
             # treat any non-timeout probe with an RTT as a valid reply
             if rtt is not None and obj.get("err") != "timeout":
                 hops[ttl]["stats"].add(float(rtt))
