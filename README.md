@@ -29,4 +29,19 @@
   - Traceroute: per-hop mean RTT, stddev, and loss%
 - Measurement: 20 pings per target, traceroute with 3 probes/hop, repeated at a second time of day for comparison
 ### Time of Day Comparison:
+(Run (night test)------
 
+sudo python3 myping.py example.com --count 20 --interval 1 --timeout 1 --json example_ping_run2.jsonl
+
+sudo python3 mytrace.py example.com --probes 3 --max-ttl 30 --timeout 2 --rdns --json example_trace_run2.jsonl
+
+
+[for summaries]
+
+python3 jsonhelper.py --ping example_ping.jsonl example_ping_run2.jsonl
+
+python3 jsonhelper.py --trace example_trace.jsonl example_trace_run2.jsonl
+
+[briefly compare]
+blah blah blah
+------)
